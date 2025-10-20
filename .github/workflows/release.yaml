@@ -1,0 +1,154 @@
+name: Release Category_Switcher
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      # 1️⃣ Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Version auslesen für Release-Name
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $json = Get-Content -Raw Version.json | ConvertFrom-Json
+          $program = $json.ProgramVersion
+          $settings = $json.SettingsVersion
+          $releaseName = "Category Switcher v$program & Settingsmenu v$settings"
+          "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+
+      # 3️⃣ Category_Switcher.zip erstellen
+      - name: Pack Category_Switcher.zip
+        id: pack   # <--- WICHTIG: ID hinzufügen!
+        shell: pwsh
+        run: |
+          function Copy-Content($items, $target) {
+              foreach ($item in $items) {
+                  if (Test-Path $item) {
+                      $dest = Join-Path $target (Split-Path $item -Leaf)
+                      Copy-Item -Recurse -Force $item $dest
+                  }
+              }
+          }
+
+          $tempDir = "ReleasePackage"
+          New-Item -ItemType Directory -Path $tempDir | Out-Null
+
+          # Dateien & Ordner kopieren
+          Copy-Content @("Release EXE\_internal", "Release EXE\Category_Switcher.exe", "Resources") $tempDir
+          Copy-Content @("Version.json","settings.xaml","Changelog.md","Category_Switcher.stevo","LICENSE") $tempDir
+
+          # Prüfen, ob Update.stevo existiert
+          $updateFile = "Release EXE\Update.stevo"
+          if (Test-Path $updateFile) {
+              Write-Host "✅ Update.stevo gefunden – wird in das Archiv aufgenommen."
+              Copy-Item -Force $updateFile (Join-Path $tempDir "Update.stevo")
+              # Variable setzen, damit später als extra Datei hochgeladen wird
+              "update_file=$updateFile" >> $env:GITHUB_OUTPUT
+          } else {
+              Write-Host "ℹ️ Keine Update.stevo gefunden."
+          }
+
+          # ZIP erstellen
+          Compress-Archive -Path "$tempDir\*" -DestinationPath "Category_Switcher.zip" -Force
+
+          # Temporären Ordner löschen
+          Remove-Item -Recurse -Force $tempDir
+
+      # 4️⃣ Category_Switcher Source.zip erstellen
+      - name: Pack Category_Switcher Source.zip
+        shell: pwsh
+        run: |
+          function Copy-Content($items, $target) {
+              foreach ($item in $items) {
+                  if (Test-Path $item) {
+                      Copy-Item -Recurse -Force $item "$target\$item"
+                  }
+              }
+          }
+          $tempDir = "SourcePackage"
+          New-Item -ItemType Directory -Path $tempDir
+          Copy-Content @("Resources", "Assets") $tempDir
+          Copy-Content @("Version.json","settings.xaml","Changelog.md","Category_Switcher.py","LICENSE","Category_Switcher.stevo") $tempDir
+          Compress-Archive -Path "$tempDir\*" -DestinationPath "Category_Switcher Source.zip" -Force
+          Remove-Item -Recurse -Force $tempDir
+
+      # 5️⃣ Changelog für aktuellen Tag auslesen (DE + EN)
+      - name: Extract changelog for current tag
+        id: changelog
+        shell: pwsh
+        run: |
+          # 1️⃣ Aktuellen Tag aus GitHub Ref extrahieren
+          $tag = $env:GITHUB_REF.Split('/')[-1]
+          Write-Host "Current tag: $tag"
+
+          # 2️⃣ Changelog auslesen
+          $lines = Get-Content Changelog.md
+          $selectedLines = @()
+          $insideBlock = $false
+
+          foreach ($line in $lines) {
+              # Start eines Blocks für genau diesen Tag (DE oder EN)
+              if ($line -match "^\#\#.*\*\*$tag(\s*\((DE|EN)\))?\*\*") {
+                  $insideBlock = $true
+                  Write-Host "Found start of block: $line"
+              }
+              # Stop, wenn ein anderer Tag beginnt (z.B. v1.1.5, v1.0-Sv1.0, etc.)
+              elseif ($line -match "^\#\#.*\*\*v\d+\.\d+(\.\d+)?(-Sv\d+\.\d+)?(\s*\(DE|EN\))?\*\*" -and ($line -notmatch "\*\*$tag")) {
+                  if ($insideBlock) { Write-Host "End of block reached at line: $line" }
+                  $insideBlock = $false
+              }
+
+              if ($insideBlock) { 
+                  $selectedLines += $line
+                  Write-Host "Adding line: $line"
+              }
+          }
+
+          # 3️⃣ Fallback, falls kein Block gefunden wurde
+          if ($selectedLines.Count -eq 0) {
+              Write-Host "No blocks found for tag $tag, using fallback"
+              $selectedLines = @(
+                  "## :small_blue_diamond: **$tag (DE)**",
+                  "### 🛠️ Fixes",
+                  "- Kleine Fehlerbehebungen",
+                  "",
+                  "## :small_blue_diamond: **$tag (EN)**",
+                  "### 🛠️ Fixes",
+                  "- Minor fixes"
+              )
+          }
+
+          # 4️⃣ Changelog zusammenfügen
+          $changelog = ($selectedLines -join "`n").Trim()
+          Write-Host "Final changelog:"
+          Write-Host $changelog
+
+          # 5️⃣ Output für GitHub Action
+          Write-Output "changelog<<EOF" >> $env:GITHUB_OUTPUT
+          Write-Output "$changelog" >> $env:GITHUB_OUTPUT
+          Write-Output "EOF" >> $env:GITHUB_OUTPUT
+
+      # 6️⃣ GitHub Release erstellen
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ steps.version.outputs.release_name }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          files: |
+            Category_Switcher.zip
+            Category_Switcher Source.zip
+            ${{ steps.pack.outputs.update_file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

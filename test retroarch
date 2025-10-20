@@ -1,0 +1,23 @@
+import requests
+
+def find_sles_in_pal(sles_code):
+    url = "https://raw.githubusercontent.com/stevo-ko/psdata/develop/ps2/pal.json"
+    response = requests.get(url)
+    if response.status_code != 200:
+        print("Konnte pal.json nicht laden!")
+        return
+
+    data = response.json()  # Liste von Spielen
+
+    for game in data:
+        game_id = game.get("id")
+        if isinstance(game_id, str) and game_id.upper() == sles_code.upper():
+            print(f"Spiel gefunden: {sles_code}")
+            print(f"Title: {game.get('title')}")
+            return
+
+    print(f"Keine Einträge für {sles_code} gefunden.")
+
+if __name__ == "__main__":
+    sles_number = "SLES-53346"
+    find_sles_in_pal(sles_number)
