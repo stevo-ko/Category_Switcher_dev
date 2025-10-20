@@ -49,7 +49,7 @@ jobs:
           Copy-Content @("Version.json","settings.xaml","Changelog.md","Category_Switcher.stevo","LICENSE") $tempDir
 
           # Prüfen, ob Update.stevo existiert
-          $updateFile = "Release EXE\Update.stevo"
+          $updateFile = "Update.stevo"
           if (Test-Path $updateFile) {
               Write-Host "✅ Update.stevo gefunden – wird in das Archiv aufgenommen."
               Copy-Item -Force $updateFile (Join-Path $tempDir "Update.stevo")
