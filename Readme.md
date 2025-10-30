@@ -1,7 +1,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/stevo-ko/Category_Switcher?display_name=tag&label=Latest%20Release&color=1E9111)](https://github.com/stevo-ko/Category_Switcher/releases/latest)
 ![Language](https://img.shields.io/badge/Language-DE-brightgreen)
 ![Language](https://img.shields.io/static/v1?label=Language&message=EN&color=1E90FF)
-[![Downloads](https://img.shields.io/github/downloads/stevo-ko/Category_Switcher/total)](https://github.com/stevo-ko/Category_Switcher_dev/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/stevo-ko/Category_Switcher_dev/total)](https://github.com/stevo-ko/Category_Switcher_dev/releases/latest)
 
 
 
