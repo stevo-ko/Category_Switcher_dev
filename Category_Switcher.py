@@ -29,6 +29,7 @@ import math
 import io
 import contextlib
 import asyncio
+import shutil
 
 default_config = {
     "twitch": {
@@ -81,8 +82,7 @@ default_config = {
             "C:\\Program Files\\Electronic Arts\\",
             "C:\\Program Files (x86)\\Battle.net\\",
             "C:\\Program Files\\Battle.net\\",
-            "C:\\Riot Games\\",
-            "E:\\Playnite portable\\"   
+            "C:\\Riot Games\\"   
         ],
         "excluded_names": [
             "Riot Client.exe",
@@ -212,6 +212,62 @@ def remove_from_config():
         with open("config.json", "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False, sort_keys=False)
 
+def restore_critical_files():
+    backup_folder = os.path.join(programm_ordner, "backups")
+    critical_files = ["config.json", "game_data.json", "Version.json"]
+    restored = False
+    if not os.path.isdir(backup_folder):
+        return False
+
+    for file in critical_files:
+        # Alle Backups dieses Typs finden
+        
+        backups = sorted(
+            [f for f in os.listdir(backup_folder) if f.startswith(file + "_") and f.endswith(".bak")],
+            key=lambda x: os.path.getmtime(os.path.join(backup_folder, x)),
+            reverse=True  # neueste zuerst
+        )
+
+        if not backups:
+            #print(f"Kein Backup gefunden für: {file}")
+            continue
+
+        # Neueste Datei auswählen
+        latest_backup = os.path.join(backup_folder, backups[0])
+
+        # Validität prüfen
+        try:
+            with open(latest_backup, "r", encoding="utf-8") as f:
+                json.load(f)
+        except json.JSONDecodeError:
+            #print(f"Ungültiges Backup (kein valides JSON): {latest_backup}")
+            continue
+
+        # Wiederherstellen
+        destination_file = os.path.join(programm_ordner, file)
+        shutil.copy2(latest_backup, destination_file)
+        #print(f"Wiederhergestellt: {file} ← {latest_backup}")
+        restored = True
+    return restored
+
+
+def check_file_validity():
+    critical_files = ["config.json", "game_data.json", "Version.json"]
+    for file in critical_files:
+        file_path = os.path.join(programm_ordner, file)
+        if not os.path.exists(file_path):
+            return False
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                json.load(f)
+        except json.JSONDecodeError:
+            return False
+    return True
+
+if not check_file_validity():
+    restore_critical_files()
+
+
 update_from_version_below_2 = False
 
 def update_from_old_version(current):
@@ -242,8 +298,39 @@ else:
     config = updated_config
     remove_from_config()
     
-    
+def backup_critical_files():
+    # Backup der wichtigen Dateien
+    # Backup important files
+    critical_files = ["config.json", "game_data.json", "Version.json"]
+    backup_folder = os.path.join(programm_ordner, "backups")
+    os.makedirs(backup_folder, exist_ok=True)
 
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+    for file in critical_files:
+        source_file = os.path.join(programm_ordner, file)
+        destination_file = os.path.join(backup_folder, f"{file}_{timestamp}.bak")
+
+        if os.path.exists(source_file):
+            shutil.copy2(source_file, destination_file)
+            print(f"Backup erstellt: {destination_file}")
+
+            # Alte Backups löschen, wenn mehr als 10 vorhanden sind 
+            backups = sorted(
+                [f for f in os.listdir(backup_folder) if f.startswith(file + "_")],
+                key=lambda x: os.path.getmtime(os.path.join(backup_folder, x))
+            )
+
+            # Falls mehr als 10, die ältesten löschen
+            while len(backups) > 10:
+                oldest = backups.pop(0)
+                os.remove(os.path.join(backup_folder, oldest))
+                ##print(f"Altes Backup gelöscht: {oldest}")
+        #else:
+            #print(f"Datei nicht gefunden: {source_file}")
+           
+backup_critical_files()
+        
 
 show_console = bool(config["options"]["show_console"])
 setting_language = config["options"]["language"]
@@ -567,8 +654,9 @@ Playnite_exit = None
 playnite_enabled = None
 game_stopped = None
 program_stopped = None
-
-
+playnite_running = None
+_last_check = 0
+_last_result = True
 
 # Pfad zur JSON
 ##filepath = r"E:\Playnite portable\RunningGame.json"
@@ -577,32 +665,58 @@ filepath = None
 # ----------------------------
 # Watchdog Handler
 # ----------------------------
+# class JsonHandler(FileSystemEventHandler):
+#     def on_modified(self, event):
+#         global latest_game_event, Playnite_Game_Stopped
+
+#         # Nur reagieren, wenn genau die RunningGame.json geändert wurde
+#         if os.path.normcase(event.src_path) == os.path.normcase(filepath):
+#             try:
+#                 with io.open(filepath, 'r', encoding='utf-8') as f:
+#                     data = json.load(f)
+#                 latest_game_event = data
+
+#                 # Wenn Spiel gestartet wurde → Event setzen
+#                 if data.get("Event") == "GameStarted":
+#                     game_started_event.set()
+
+#                 if data.get("Event") == "GameStopped":
+#                     game_started_event.clear()
+                    
+#                     Playnite_Game_Stopped = True
+
+#             except json.JSONDecodeError:
+#                 # Datei wird gerade von Playnite beschrieben → ignorieren
+#                 pass
+#             except Exception as e:
+#                 print(f"Fehler beim Lesen der JSON: {e}")
+
 class JsonHandler(FileSystemEventHandler):
+    last_run = 0
+
     def on_modified(self, event):
         global latest_game_event, Playnite_Game_Stopped
 
-        # Nur reagieren, wenn genau die RunningGame.json geändert wurde
-        if os.path.normcase(event.src_path) == os.path.normcase(filepath):
-            try:
-                with io.open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                latest_game_event = data
+        # Nur auf genau die RunningGame.json reagieren
+        if os.path.normcase(event.src_path) != os.path.normcase(filepath):
+            return
+        
+        try:
+            with io.open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            latest_game_event = data
 
-                # Wenn Spiel gestartet wurde → Event setzen
-                if data.get("Event") == "GameStarted":
-                    game_started_event.set()
+            if data.get("Event") == "GameStarted":
+                game_started_event.set()
 
-                if data.get("Event") == "GameStopped":
-                    game_started_event.clear()
-                    
-                    Playnite_Game_Stopped = True
+            if data.get("Event") == "GameStopped":
+                game_started_event.clear()
+                Playnite_Game_Stopped = True
 
-            except json.JSONDecodeError:
-                # Datei wird gerade von Playnite beschrieben → ignorieren
-                pass
-            except Exception as e:
-                print(f"Fehler beim Lesen der JSON: {e}")
-
+        except json.JSONDecodeError:
+            pass
+        except Exception as e:
+            print(f"Fehler beim Lesen der JSON: {e}")
 
 
 
@@ -616,6 +730,7 @@ def start_watcher():
         return
 
     observer = Observer()
+    print(f"Observer-Typ: {type(observer).__name__}")
     event_handler = JsonHandler()
     directory = os.path.dirname(filepath)
     observer.schedule(event_handler, path=directory, recursive=False)
@@ -675,11 +790,11 @@ last_modified = None
 save_games_to_file = True
 unique_id = None
 seen_processes = None
-
+printed_closed = False
 
 def main_logic():
     
-    global token, CLIENT_ID, token_valid, category_set_already, language, previous_saved_games, first_save, game_folder, config_path, last_modified, message, with_console, known_exe_names, settingspath, update_from_version_below_2
+    global token, CLIENT_ID, token_valid, category_set_already, language, previous_saved_games, first_save, game_folder, config_path, last_modified, message, with_console, known_exe_names, settingspath, update_from_version_below_2, printed_closed
     
     ## delays
     global delay_programming, delay_general, delay_playnite, game_stopped, program_stopped
@@ -688,7 +803,7 @@ def main_logic():
     global kick_token, kick_client_id, kick_client_secret, kick_enabled, kick_missing, kick_failed
 
     ## Playnite globals
-    global Playnite_exit, Playnite_Game_Retry, playnite_enabled, save_games_to_file, observer, filepath, game_set, Playnite_Game_Stopped, watcher_started, waiting_for_game, game_started_event, latest_game_event 
+    global _last_check, _last_result, Playnite_exit, Playnite_Game_Retry, playnite_enabled, save_games_to_file, observer, filepath, game_set, Playnite_Game_Stopped, watcher_started, waiting_for_game, game_started_event, latest_game_event, playnite_running 
     
 ##    print(config_path)
 ##    print(last_modified)
@@ -935,10 +1050,11 @@ def main_logic():
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return False
+    
+    
 
     def is_playnite_running():
         if not playnite_enabled:
-            
             return False
         for proc in psutil.process_iter(['name']):
             try:
@@ -952,7 +1068,26 @@ def main_logic():
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 
                 continue
+        
         return False
+
+
+    def is_playnite_running_old(interval=3):
+        """
+        Prüft, ob Playnite läuft, aber nur alle `interval` Sekunden wirklich per psutil.
+        Dazwischen wird das letzte Ergebnis zurückgegeben (Cache).
+        """
+        global _last_check, _last_result
+        now = time.time()
+        if now - _last_check < interval:
+            return _last_result  # altes Ergebnis zurückgeben
+
+        _last_check = now
+        _last_result = any(
+            "playnite" in (p.info["name"] or "").lower()
+            for p in psutil.process_iter(["name"])
+        )
+        return _last_result
 
     def get_streamerbot_url():
 
@@ -1761,14 +1896,21 @@ def main_logic():
                 # Make sure process has an valid exe_path and is in allowed_paths
                 if not exe_path or name in excluded_names:
                     continue
-
+                
                 # Prüfen, ob der exe_path in allowed_paths ist
                 normalized_exe_path = os.path.normcase(os.path.normpath(exe_path))
                 normalized_allowed_paths = [os.path.normcase(os.path.normpath(path)) for path in allowed_paths]
+                name_lower = name.lower()
+                
+                skip_path_check = name_lower in (
+                    'playnite.desktopapp.exe',
+                    'playnite.fullscreenapp.exe'
+                )
 
-                if not any(normalized_exe_path.startswith(path) for path in normalized_allowed_paths):
-##                    print(f"Prozess {name} mit exe_path {exe_path} ist nicht in allowed_paths.")
-                    continue  # Wenn der exe_path nicht in allowed_paths liegt, überspringe diesen Prozess
+                if not skip_path_check:
+                    if not any(normalized_exe_path.startswith(path) for path in normalized_allowed_paths):
+##                        print(f"Prozess {name} mit exe_path {exe_path} ist nicht in allowed_paths.")
+                        continue  # Wenn der exe_path nicht in allowed_paths liegt, überspringe diesen Prozess
                 exe_lower = os.path.basename(exe_path).lower()
                 
                 #Überspringe verschiedene nicht gewollte Exe dateien
@@ -1862,14 +2004,13 @@ def main_logic():
                     continue
                 
                 if "retroarch" in exe_lower and exe_lower.endswith(".exe"):
-                    ##continue
+                    continue
                     if is_playnite_running() or game_set:
                         continue
-                    else:
-                        continue
-                       
+
                                     
-                if "playnite.desktopapp" in exe_lower and exe_lower.endswith(".exe"):
+                if (("playnite.desktopapp" in exe_lower or "playnite.fullscreenapp" in exe_lower ) and exe_lower.endswith(".exe")):
+                    playnite_running = True
                     if playnite_enabled:
                         if not watcher_started:
                             folder_path = os.path.dirname(exe_path)
@@ -1878,9 +2019,11 @@ def main_logic():
                             start_watcher()
                             watcher_started = True
                             game_started_event.clear()
-                            
-                            print(f"\n✅ Playnite erkannt: PID {pid} Path: {exe_path}\n")
-                            
+                            if language == 1:
+                                print(f"\n✅ Playnite erkannt: PID {pid} Path: {exe_path}\n")
+                            if language == 0:
+                                print(f"\n✅ Playnite detected: PID {pid} Path: {exe_path}\n")
+                                 
                             print("-" * 90)
                             if language == 1:           
                                 print("⌛ Warte auf GameStarted Event 🎮".center(82))
@@ -1889,21 +2032,9 @@ def main_logic():
                             print("-" * 90)
                             waiting_for_game = True
 
-                        if waiting_for_game:
-##                            game_started_event.wait()  # blockiert, bis Event gesetzt wird
-                            
-##                            waiting_for_game = False
-##                            game_folder = latest_game_event['Name']
-##                            kick_game_folder = game_folder
-###                            exe_path = latest_game_event['Path']
- ##                           game_set = True
-                            ##print(f"🎮 Neuestes Spiel aus Playnite: {game_folder}")
-                            
-  ##                          if latest_game_event.get('Type') != "Emulator":
-    ##                            save_games_to_file = False
-                             
+                        if waiting_for_game:                             
                             while True:
-                                
+                                game_started_event.wait(timeout=1)
                                 # 1️⃣ Wenn Spiel gestartet wurde → weiter
                                 if game_started_event.is_set():
                                     waiting_for_game = False
@@ -1915,7 +2046,7 @@ def main_logic():
                                     if latest_game_event.get('Type') != "Emulator":
                                         save_games_to_file = False
 
-                                    print(f"🎮 Neuestes Spiel aus Playnite: {game_folder}")
+                                    #print(f"🎮 Neuestes Spiel aus Playnite: {game_folder}")
                                     break
 
                                 # 2️⃣ Wenn Playnite nicht mehr läuft → abbrechen
@@ -1926,13 +2057,15 @@ def main_logic():
                                     Playnite_Game_Retry = True
                                     Playnite_Game_Stopped = False
                                     Playnite_exit = True
+                                    save_games_to_file = True
                                     if watcher_started:
                                         watcher_started = False
                                         stop_watcher()
                                     
                                     break
 
-                            time.sleep(0.5)  # CPU-schonend                              
+                            time.sleep(0.5)  # CPU-schonend
+                                                          
                             if Playnite_exit:
                                 game_folder = "Playnite"
                                 continue    
@@ -1945,7 +2078,16 @@ def main_logic():
                     else:
                         continue
                     
-                    
+                if playnite_running == True and waiting_for_game == False:
+                    if not is_playnite_running():
+                        game_set = False
+                        Playnite_Game_Retry = True
+                        Playnite_Game_Stopped = False
+                        Playnite_exit = True
+                        save_games_to_file = True
+                        if watcher_started:
+                            watcher_started = False
+                            stop_watcher()             
                 
                 if is_ue_or_known_exe_path(exe_path.lower()):
                     game_folder = "Software and game development"
@@ -2048,6 +2190,24 @@ def main_logic():
                     
                 if game_folder == "the witcher 2":
                     game_folder = "The Witcher 2: Assassins of Kings"
+                    
+                if "retroarch" in game_folder.lower():
+                    game_folder = "Retro"
+                    kick_game_folder = "Retro Games"
+
+                # Entfernt alle gängigen Test-Endungen wie Demo, Alpha, Beta, Test (mit Klammern, Bindestrichen, Version etc.)
+                # Liste möglicher Suffixe
+                suffixes = ("demo", "alpha", "beta", "test")
+
+                # Nur ersetzen, wenn einer dieser Begriffe im Namen vorkommt
+                if any(suffix in game_folder.lower() for suffix in suffixes):
+                    game_folder = re.sub(
+                        r'[\s\-_()]*\b(?:demo|alpha|beta|test)(?:[\s\-_()]*version|\s*v?\d+)?[\s\-_()]*$',
+                        '',
+                        game_folder,
+                        flags=re.IGNORECASE
+                    ).strip()
+                    kick_game_folder = game_folder
 
                                         
                 # Eindeutige Kombination aus PID und exe_path (damit `current_seen` funktioniert)
@@ -2065,8 +2225,9 @@ def main_logic():
                     kick_id = str(game_data.get("Kick Category ID") or "").strip()
                     kick_name = str(game_data.get("Kick Category Name") or "").strip()
 
-                    kick_missing = (kick_id == "" or kick_name == "")
+                    kick_missing = (kick_name == "")
                     Playnite_Game_Retry = False
+                    
                 # Spiel gilt nur als in DB vorhanden, wenn game_data existiert und Kick nicht fehlt
                 if game_data and game_folder not in displayed_games and not kick_missing:
 
@@ -2216,14 +2377,25 @@ def main_logic():
                                         "Twitch Box Art": "https://static-cdn.jtvnw.net/ttv-boxart/2058570718_IGDB-285x380.jpg"
                                     }
                                 elif game_folder == "Spyro The Dragon":
-                                    category['id'] = "1885901697"
+                                    category['id'] = "1608308954"
                                     game_data = {
                                         "Game": game_folder,
                                         "Path": os.path.normpath(exe_path),  
                                         "Twitch Category Name": best_match["name"],
-                                        "Twitch Category ID": "1885901697",
+                                        "Twitch Category ID": category['id'],
                                         "Twitch Box Art": get_largest_box_art_url(category['box_art_url'], category['id'], width, height)
                                     }
+
+                                elif game_folder == "Dispatch":
+                                    category['id'] = "602959317"
+                                    game_data = {
+                                        "Game": game_folder,
+                                        "Path": os.path.normpath(exe_path),  
+                                        "Twitch Category Name": best_match["name"],
+                                        "Twitch Category ID": category['id'],
+                                        "Twitch Box Art": get_largest_box_art_url(category['box_art_url'], category['id'], width, height)
+                                    }
+
                                 elif game_folder == "Software and game development":
                                     game_data = {
                                         "Game": game_folder,
@@ -2261,7 +2433,7 @@ def main_logic():
                                                 logging.info(f"⚠️ Keine Kick-Kategorie für '{kick_game_folder}' gefunden.")
                                                 logging.info(f"⚠ Pfad aus welchem Name extrahiert wurde '{path_norm}")
                                         if language == 0:
-                                            print(f"⚠️ No Kick Category found for '{game_folder}'.")
+                                            print(f"⚠️ No Kick Category found for '{kick_game_folder}'.")
                                             if not show_console:
                                                 start_logging()
                                                 logging.info(f"⚠️ No Kick Category found for '{kick_game_folder}'.")
@@ -2544,6 +2716,7 @@ def main_logic():
                 delayed_reset_called[stopped_game] = False
                 displayed_warning = False
                 displayed_warning_category = False
+                save_games_to_file = True
 
             delay_seconds = delay_ms / 1000.0
             threading.Thread(target=lambda: (time.sleep(delay_seconds), reset())).start()
@@ -2595,31 +2768,41 @@ def main_logic():
                     Playnite_Game_Stopped = False
             waiting_for_game = True
             game_set = False
+            save_games_to_file = True
             Playnite_Game_Retry = True
-        
+       
         if not is_playnite_running():
-            if Playnite_exit:  
+            
+            if Playnite_exit or (playnite_running == True and waiting_for_game == False): 
+                if playnite_running == True:
+                    name = "Playnite"
+                else: 
+                    name = game_Folder
                 if language == 1:
                     print("-" * 90)
-                    print(f"   ❌ {game_folder} Beendet: PID {pid}")
+                    print(f"   ❌ {name} Beendet: PID {pid}")
                     print("-" * 90)
                 if language == 0:
                     print("-" * 90)
-                    print(f"   ❌ {game_folder} Closed: PID {pid}")
+                    print(f"   ❌ {name} Closed: PID {pid}")
                     print("-" * 90)   
-                Playnite_exit = False      
-                               
+                Playnite_exit = False
+                playnite_running = False
+                printed_closed = True
+                   
+                   
             for unique_id in seen_processes - current_seen:
                 pid, exe_path = unique_id
-
-                if language == 1:
-                    print("-" * 90)
-                    print(f"   ❌ Beendet: PID {pid}, Spiel: {game_folder}")
-                    print("-" * 90)
-                if language == 0:
-                    print("-" * 90)
-                    print(f"   ❌ Closed: PID {pid}, Game: {game_folder}")
-                    print("-" * 90)
+                if not printed_closed:
+                    if language == 1:
+                        print("-" * 90)
+                        print(f"   ❌ Beendet: PID {pid}, Spiel: {game_folder}")
+                        print("-" * 90)
+                    if language == 0:
+                        print("-" * 90)
+                        print(f"   ❌ Closed: PID {pid}, Game: {game_folder}")
+                        print("-" * 90)   
+                printed_closed = False
 
                 if game_folder == "Software and game development":
                     

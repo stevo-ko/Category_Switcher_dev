@@ -69,6 +69,8 @@ public class CPHInline
     private string remoteSettingsVersion;
     private bool _cancelDownload = false;
     private bool _checkUpdateInvokedByButton = false;
+
+    private bool HasUpdateImport = false;
     private bool AutoUpdate;
     private bool DidRun;
     private UpdateResult _lastUpdateResult;
@@ -110,7 +112,7 @@ public class CPHInline
         // ==== DE: Definiere Pfade zu den Dateien | EN: Define paths to the files ====
         filePath = Path.Combine(FolderPath, "settings.xaml");
         configPath = Path.Combine(FolderPath, "config.json");
-        settingsPath = Path.Combine(FolderPath, "settings.json");
+        //settingsPath = Path.Combine(FolderPath, "settings.json");
         messagesPath = Path.Combine(FolderPath, "messages.json");
         imagesPath = Path.Combine(FolderPath, "_internal", "Assets");
         LocalVersionFile = Path.Combine(FolderPath, "Version.json");
@@ -138,7 +140,7 @@ public class CPHInline
                 if (_lastUpdateResult != null)
                 {
                     if (_lastUpdateResult.ProgramUpdate)
-                    {
+                    {                        
                         ((Grid)currentWindow.FindName("UpdateOverlay")).Visibility = Visibility.Visible;
                         ((TextBlock)currentWindow.FindName("YourVersionSettings")).Text = "v" + _lastUpdateResult.CurrentSettingsVersion;
                         ((TextBlock)currentWindow.FindName("YourVersionProgram")).Text = "v" + _lastUpdateResult.CurrentProgramVersion;                                             
@@ -146,12 +148,13 @@ public class CPHInline
                         ((TextBlock)currentWindow.FindName("UpdateVersionProgram")).Text = "v" + _lastUpdateResult.RemoteProgramVersion;
                         ((TextBlock)currentWindow.FindName("ArrowProgram")).Visibility = Visibility.Visible;
                         ((TextBlock)currentWindow.FindName("ArrowSettings")).Visibility = Visibility.Visible;
+                        HasUpdateImport = _lastUpdateResult.HasUpdateImport;
                         //ArrowSettings = (TextBlock)window.FindName("ArrowSettings");
                         //ArrowSettings.Visibility = Visibility.Visible;
                         //UpdateSettingsVersion.Text = "v" + remoteSettingsVersion;
                         if (!string.IsNullOrWhiteSpace(_lastUpdateResult.Changelog))
                         {
-                            
+
                             var ChangelogBorder = (Border)currentWindow.FindName("Changelog");
                             ChangelogBorder.Visibility = Visibility.Visible;
                             var changelogBox = (RichTextBox)currentWindow.FindName("ChangelogMarkdown");
@@ -160,6 +163,7 @@ public class CPHInline
                             var emojiMap = BuildGitHubEmojiUrlMap();
                             SetMarkdownToRichTextBoxRich(changelogBox, markdown, emojiMap);
                             ((Button)currentWindow.FindName("btnUpdate")).Visibility = Visibility.Visible;
+                            ((Button)currentWindow.FindName("btnGithub")).Visibility = Visibility.Visible;
 
                         }
                     ((Button)currentWindow.FindName("btnBackUpdate")).Visibility = Visibility.Collapsed;
@@ -334,6 +338,7 @@ public class CPHInline
                 }
             }
         }
+
 
         //MessageBox.Show("Gefundene Tags:\n" + string.Join("\n", tags), "Debug Tags");
         
@@ -919,6 +924,7 @@ public class CPHInline
         //Delays
         ((Slider)window.FindName("sldDelayGeneral")).Value = options["delay_general"]?.ToObject<int>() ?? 0;
         ((Slider)window.FindName("sldDelayProgramming")).Value = options["delay_programming"]?.ToObject<int>() ?? 60;
+        ((Slider)window.FindName("sldDelayPlaynite")).Value = options["delay_playnite"]?.ToObject<int>() ?? 0;
         // Options
         ((ToggleButton)window.FindName("toggleWatchStreamerBot")).IsChecked = options["watch_streamerbot"]?.ToObject<bool>() ?? true;
         ((ToggleButton)window.FindName("toggleWatchOBS")).IsChecked = options["watch_obs"]?.ToObject<bool>() ?? false;
@@ -1789,7 +1795,8 @@ public class CPHInline
                 ["playnite_enabled"] = ((ToggleButton)window.FindName("togglePlaynite")).IsChecked == true,
                 ["language"] = currentLanguage,
                 ["delay_general"] = (int)((Slider)window.FindName("sldDelayGeneral")).Value,
-                ["delay_programming"] = (int)((Slider)window.FindName("sldDelayProgramming")).Value
+                ["delay_programming"] = (int)((Slider)window.FindName("sldDelayProgramming")).Value,
+                ["delay_playnite"] = (int)((Slider)window.FindName("sldDelayPlaynite")).Value
             }
         };
 
@@ -3196,9 +3203,11 @@ public class CPHInline
     private void btnCheckUpdate_Click(object sender, RoutedEventArgs e)
     {
         _checkUpdateInvokedByButton = true;
+        ResetUpdateOverlay();
         ScanCategorySwitcherAsync();
         CheckUpdate();
         LoadingIcons();
+        
         _checkUpdateInvokedByButton = false; // optional, falls du das Flag nur temporär brauchst
     }
 
@@ -3229,6 +3238,53 @@ public class CPHInline
 
     private async void btnUpdate_Click(object sender, RoutedEventArgs e)
     {
+        
+        Window w = GetWindowFromSender(sender);
+        var cancelButton = (Button)w.FindName("btnCancelDownload");
+
+        var img = cancelButton.Content as Image;
+
+        if (img == null && cancelButton.Content is Panel p)
+        {
+            img = p.Children.OfType<Image>().FirstOrDefault();
+
+        }
+
+        string localPath = Path.Combine(FolderPath ?? "", "_internal", "Assets", "cancel.png");
+
+        if (File.Exists(localPath))
+        {
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.UriSource = new Uri(localPath, UriKind.Absolute);
+                bmp.EndInit();
+                bmp.Freeze(); 
+
+                img.Source = bmp;
+
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"[DEBUG] Fehler beim Laden lokaler Datei:\n{ex.Message}", "Fehler");
+            }
+        }
+        else
+        {
+
+            try
+            {
+                img.Source = new BitmapImage(new Uri(
+                    "https://img.icons8.com/?size=100&id=fYgQxDaH069W&format=png&color=000000"));
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"[DEBUG] Fehler beim Setzen des Fallback-Bildes:\n{ex.Message}", "Fehler");
+            }
+        }
+
         string wantedAssetName = "Category_Switcher.zip";
         _cancelDownload = false;
         try
@@ -3251,6 +3307,7 @@ public class CPHInline
     /// 
     public async Task DownloadUpdateAsync(string wantedAssetName)
     {
+        
         if (_categorySwitcherPids != null && _categorySwitcherPids.Any())
         {
             foreach (var pid in _categorySwitcherPids.ToList())
@@ -3276,6 +3333,7 @@ public class CPHInline
         var ProgressPercent = (TextBlock)window.FindName("ProgressPercent");
         var ProgressText = (TextBlock)window.FindName("ProgressText");
         var ChangelogBorder = (Border)window.FindName("Changelog");
+        var updateImport = (Border)window.FindName("UpdateImport");
         var CancelDownload = (Button)window.FindName("btnCancelDownload");
         var GithubBtn = (Button)window.FindName("btnGithub");
         var Update = (Button)window.FindName("btnUpdate");
@@ -3301,6 +3359,7 @@ public class CPHInline
         await Task.Delay(200);
         //GithubBtn.Visibility = Visibility.Collapsed;
         CancelDownload.Visibility = Visibility.Visible;
+        
         _cancelDownload = false;
         try
         {
@@ -3309,11 +3368,13 @@ public class CPHInline
             {
 
                 //DownloadProgressSection.Visibility = Visibility.Visible;
+                
                 DownloadProgressSection.Visibility = Visibility.Visible;
 
                 ProgressBarBorder.Visibility = Visibility.Visible;
                 ProgressPercent.Visibility = Visibility.Visible;
                 ProgressText.Visibility = Visibility.Visible;
+                updateImport.Visibility = Visibility.Collapsed;
                 var fadeIn = (Storyboard)DownloadProgressSection.Resources["FadeInProgressStoryboard"];
                 fadeIn.Begin();
                 // ProgressBar wieder auf ursprünglichen Gradient zurücksetzen
@@ -3388,6 +3449,7 @@ public class CPHInline
                         // Temporäre ZIP-Datei löschen
                         if (File.Exists(zipPath))
                             File.Delete(zipPath);
+
                         // Einfach return, keine Exception werfen
                         return;
                     }
@@ -3461,6 +3523,7 @@ public class CPHInline
                         Directory.Delete(FolderPath, true);
                     if (File.Exists(zipPath))
                         File.Delete(zipPath);
+
                     // Methode sauber verlassen
                     return;
                 }
@@ -3470,6 +3533,10 @@ public class CPHInline
                 ProgressText.Text = updateStrings.ContainsKey("Update_Success") ? updateStrings["Update_Success"] : "Download abgeschlossen!";
                 ProgressText.Foreground = Brushes.Green;
                 ProgressText.FontWeight = FontWeights.Bold;
+                if (HasUpdateImport)
+                {
+                    updateImport.Visibility = Visibility.Visible;
+                }
                 Update.Visibility = Visibility.Collapsed;
                 CancelDownload.Visibility = Visibility.Collapsed;
                 if (DidRun == true)
@@ -3571,6 +3638,10 @@ public class CPHInline
         // Download Section zurücksetzen
         var downloadSection = (StackPanel)window.FindName("DownloadProgressSection");
         downloadSection.Visibility = Visibility.Collapsed;
+
+        var updateImport = (Border)window.FindName("UpdateImport");
+        updateImport.Visibility = Visibility.Collapsed;
+
         var progressBar = (Border)window.FindName("ProgressBar");
         progressBar.Width = 0;
         progressBar.Visibility = Visibility.Collapsed;
@@ -3602,6 +3673,8 @@ public class CPHInline
         public string CurrentSettingsVersion { get; set; }
         public string RemoteProgramVersion { get; set; }
         public string RemoteSettingsVersion { get; set; }
+
+        public bool HasUpdateImport { get; set; }
         public string Changelog { get; set; }
     }
 
@@ -3679,7 +3752,13 @@ public class CPHInline
                     markdown = NormalizeMarkdown(markdown);
                     var emojiMap = BuildGitHubEmojiUrlMap();
                     SetMarkdownToRichTextBoxRich(changelogBox, markdown, emojiMap);
-                }
+                    if (_lastUpdateResult.HasUpdateImport)
+                    {
+                        HasUpdateImport = true;
+                    }
+                    //MessageBox.Show($"Updatestevo: {HasUpdateImport}");
+                    }
+
                 return _lastUpdateResult;
             }
         }
@@ -3756,6 +3835,23 @@ public class CPHInline
             MessageBox.Show($"Regex hat nicht gepasst für Tag: {tag}", "Debug", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
 
+            var updateimport = remoteJson["assets"] as JArray;
+            if (updateimport != null)
+            {
+                foreach (var asset in updateimport)
+                {
+                    string name = asset["name"]?.ToString() ?? "";
+                    if (name.Equals("Update.stevo", StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.HasUpdateImport = true;
+                        HasUpdateImport = result.HasUpdateImport;
+                        CPH.LogInfo($"Update.stevo gefunden: {result.HasUpdateImport}");
+                        break;
+                    }
+                }
+            }
+
+
             if (_checkUpdateInvokedByButton)
             {
                 remoteProgramVersion = match.Groups["prog"].Value;
@@ -3772,6 +3868,8 @@ public class CPHInline
             //MessageBox.Show($"Remote Versionen:\n" + $"Programm: {remoteProgramVersion}\n" + $"Settings: {remoteSettingsVersion}","Debug", MessageBoxButton.OK, MessageBoxImage.Information);
             result.ProgramUpdate = new Version(remoteProgramVersion) > new Version(localVersion.ProgramVersion);
             result.SettingsUpdate = new Version(remoteSettingsVersion) > new Version(localVersion.SettingsVersion);
+           
+
             //MessageBox.Show($"Update-Check Ergebnis:\n" + $"Programm Update: {result.ProgramUpdate}\n" + $"Settings Update: {result.SettingsUpdate}", "Debug", MessageBoxButton.OK, MessageBoxImage.Information);
             // Release Notes auslesen
             var changelog = remoteJson["body"]?.ToString() ?? "Kein Changelog vorhanden";
